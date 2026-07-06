@@ -139,5 +139,5 @@ runs:
       if: inputs.sarif_output == 'true' && always()
       uses: github/codeql-action/upload-sarif@v3
       with:
-        sarif_file: synthscan-report.sarif
+        sarif_file: ${{ steps.scan.outputs.sarif_path }}
         category: synthscan
