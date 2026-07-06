@@ -2,7 +2,7 @@
 
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-SynthScan-orange?logo=github)](https://github.com/marketplace/actions/synthscan)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0-blue)](https://github.com/marcoramilli/SynthScan/releases)
 
 **Detect AI-generated (synthetic) code patterns in your repository and automatically open a GitHub Issue with the findings.**
 
