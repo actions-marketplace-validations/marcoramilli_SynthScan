@@ -31,6 +31,18 @@ inputs:
     description: "File path for the JSON report."
     required: false
     default: "synthscan-report.json"
+  diff_file:
+    description: "Path to a unified diff file. When set, only added lines in the diff are scored (PR mode)."
+    required: false
+    default: ""
+  sarif_output:
+    description: "Emit a SARIF 2.1.0 report for GitHub Code Scanning inline annotations (true/false)."
+    required: false
+    default: "false"
+  ignore_file:
+    description: "Path to a .synthscanignore file with gitignore-style path patterns to exclude."
+    required: false
+    default: ".synthscanignore"
 
 outputs:
   score:
@@ -47,6 +59,8 @@ outputs:
     description: "Number of HIGH or CRITICAL matches per file scanned."
   by_directory:
     description: "JSON object mapping directory paths to their score."
+  sarif_path:
+    description: "Path of the emitted SARIF report (only set when sarif_output is true)."
 
 runs:
   using: "composite"
@@ -64,6 +78,9 @@ runs:
         INPUT_PATTERNS_FILE: ${{ inputs.patterns_file }}
         INPUT_SCORE_THRESHOLD: ${{ inputs.score_threshold }}
         INPUT_REPORT_PATH: ${{ inputs.report_path }}
+        INPUT_DIFF_FILE: ${{ inputs.diff_file }}
+        INPUT_SARIF_OUTPUT: ${{ inputs.sarif_output }}
+        INPUT_IGNORE_FILE: ${{ inputs.ignore_file }}
       run: |
         python "${{ github.action_path }}/scanner/synthscan.py"
 
@@ -109,3 +126,10 @@ runs:
       with:
         name: synthscan-report
         path: ${{ inputs.report_path }}
+
+    - name: Upload SARIF report
+      if: inputs.sarif_output == 'true' && always()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: synthscan-report.sarif
+        category: synthscan
