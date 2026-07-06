@@ -805,7 +805,7 @@ def scan_directory(
                 except ValueError:
                     rel_key = str(fpath)
                 diff_lines_for_file = diff_map.get(rel_key)
-                if diff_lines_for_file is None:
+                if not diff_lines_for_file:
                     continue  # file has no added lines in this diff — skip entirely
 
             # Read file text once; reuse for line count and docstring collection
