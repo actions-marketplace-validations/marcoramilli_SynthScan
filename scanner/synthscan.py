@@ -698,12 +698,13 @@ def parse_unified_diff(diff_text: str) -> "dict[str, set[int]]":
             if hunk_m:
                 current_new_line = int(hunk_m.group(1)) - 1
         elif current_file is not None:
+            if raw_line.startswith("\\"):
+                continue  # e.g. "\\ No newline at end of file"
             if raw_line.startswith("+") and not raw_line.startswith("+++"):
                 current_new_line += 1
                 result[current_file].add(current_new_line)
             elif not raw_line.startswith("-"):
                 current_new_line += 1
-    return result
 
 
 # ---------------------------------------------------------------------------
