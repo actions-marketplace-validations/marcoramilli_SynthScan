@@ -26,6 +26,12 @@ SEVERITY_SCORES = {
 # Fallback when no explicit tag and no "Default severity" line.
 DEFAULT_SEVERITY = "MEDIUM"
 
+SYNTHSCAN_VERSION = "2.0.0"
+SARIF_SCHEMA = (
+    "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/"
+    "Schemata/sarif-schema-2.1.0.json"
+)
+
 
 @dataclass
 class PatternDef:
@@ -36,6 +42,7 @@ class PatternDef:
     severity: str = "MEDIUM"
     compiled: "re.Pattern | None" = None
     applies_to: "frozenset[str] | None" = None  # file extensions, e.g. {".py"}
+    excludes_from: "frozenset[str] | None" = None  # file extensions to skip, e.g. {".md"}
 
     @property
     def score(self) -> float:
@@ -130,6 +137,7 @@ SOURCE_ONLY_CATEGORIES = frozenset({
 _SEVERITY_TAG_RE = re.compile(r"^\[(CRITICAL|HIGH|MEDIUM|LOW)\]\s*", re.IGNORECASE)
 _DEFAULT_SEV_RE = re.compile(r"Default severity:\s*\*{0,2}(CRITICAL|HIGH|MEDIUM|LOW)\*{0,2}", re.IGNORECASE)
 _APPLIES_TO_RE = re.compile(r"Applies to:\s*(.+)", re.IGNORECASE)
+_EXCLUDES_RE = re.compile(r"Excludes:\s*(.+)", re.IGNORECASE)
 
 
 def load_patterns(md_path: str) -> List[PatternDef]:
@@ -139,6 +147,7 @@ def load_patterns(md_path: str) -> List[PatternDef]:
     current_category = "Uncategorised"
     category_severity = DEFAULT_SEVERITY
     category_applies_to: "frozenset[str] | None" = None
+    category_excludes_from: "frozenset[str] | None" = None
     in_block = False
 
     with open(md_path, encoding="utf-8") as fh:
@@ -150,6 +159,7 @@ def load_patterns(md_path: str) -> List[PatternDef]:
                 current_category = line[3:].strip()
                 category_severity = DEFAULT_SEVERITY  # reset
                 category_applies_to = None  # reset
+                category_excludes_from = None  # reset
                 continue
 
             # Detect "Default severity: **HIGH**" lines outside blocks
@@ -164,6 +174,12 @@ def load_patterns(md_path: str) -> List[PatternDef]:
                 if applies_match:
                     exts = {e.strip().lower() for e in applies_match.group(1).split(",") if e.strip()}
                     category_applies_to = frozenset(exts) if exts else None
+                    continue
+
+                excludes_match = _EXCLUDES_RE.search(line)
+                if excludes_match:
+                    exts = {e.strip().lower() for e in excludes_match.group(1).split(",") if e.strip()}
+                    category_excludes_from = frozenset(exts) if exts else None
                     continue
 
             # Detect fenced-block boundaries
@@ -205,6 +221,7 @@ def load_patterns(md_path: str) -> List[PatternDef]:
                 severity=severity,
                 compiled=compiled,
                 applies_to=category_applies_to,
+                excludes_from=category_excludes_from,
             ))
 
     return patterns
@@ -230,7 +247,7 @@ def _is_scannable(path: Path) -> bool:
     return True
 
 
-def scan_file(filepath: Path, patterns: List[PatternDef]) -> List[Match]:
+def scan_file(filepath: Path, patterns: List[PatternDef], diff_lines: "set[int] | None" = None) -> List[Match]:
     """Scan a single file against all patterns."""
     matches: List[Match] = []
     try:
@@ -268,9 +285,19 @@ def scan_file(filepath: Path, patterns: List[PatternDef]) -> List[Match]:
 
         context_multiplier = {"COMMENT": 1.5, "STRING": 0.5, "CODE": 1.0}.get(context, 1.0)
 
+        # Diff mode: skip lines not introduced in this diff
+        if diff_lines is not None and line_no not in diff_lines:
+            continue
+        # Inline suppression: `# synthscan: ignore` anywhere on the line
+        if "synthscan: ignore" in line_text.lower():
+            continue
+
         for pat in patterns:
             # Skip patterns scoped to specific file extensions
             if pat.applies_to and file_ext not in pat.applies_to:
+                continue
+            # Skip patterns explicitly excluded for this file extension
+            if pat.excludes_from and file_ext in pat.excludes_from:
                 continue
             # Suppress phrase-slop patterns on documentation files
             if file_ext in DOC_EXTENSIONS and pat.category in SOURCE_ONLY_CATEGORIES:
@@ -480,6 +507,53 @@ def scan_file_ast(filepath: Path) -> List[Match]:
                     context="CODE",
                 ))
 
+            # Result-variable anti-pattern: `result = expr; return result`
+            # LLM-generated code almost universally uses an intermediate named variable
+            # before the final return rather than returning the expression directly.
+            _RESULT_NAMES = {
+                "result", "output", "response", "data", "ret", "rv",
+                "value", "res", "processed", "out",
+            }
+            if len(body) >= 2:
+                last_stmt = body[-1]
+                prev_stmt = body[-2]
+                if (
+                    isinstance(last_stmt, ast.Return)
+                    and isinstance(last_stmt.value, ast.Name)
+                    and last_stmt.value.id in _RESULT_NAMES
+                    and isinstance(prev_stmt, ast.Assign)
+                    and len(prev_stmt.targets) == 1
+                    and isinstance(prev_stmt.targets[0], ast.Name)
+                    and prev_stmt.targets[0].id == last_stmt.value.id
+                ):
+                    ast_matches.append(Match(
+                        file=str(filepath),
+                        line_number=last_stmt.lineno,
+                        line_text="",
+                        pattern_raw="result-variable pattern (assign generic name then immediately return it)",
+                        category="AI Structural Patterns",
+                        severity="LOW",
+                        score=1.0,
+                        context="CODE",
+                    ))
+
+            # Over-parameterized function: > 7 optional arguments with defaults.
+            # AI models habitually make every parameter optional to appear "flexible".
+            all_defaults = node.args.defaults + [
+                d for d in node.args.kw_defaults if d is not None
+            ]
+            if len(all_defaults) > 7:
+                ast_matches.append(Match(
+                    file=str(filepath),
+                    line_number=node.lineno,
+                    line_text="",
+                    pattern_raw=f"over-parameterized function ({len(all_defaults)} optional args)",
+                    category="AI Structural Patterns",
+                    severity="LOW",
+                    score=1.0,
+                    context="CODE",
+                ))
+
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
             # Unused imports
             for alias in node.names:
@@ -501,30 +575,196 @@ def scan_file_ast(filepath: Path) -> List[Match]:
 
 
 # ---------------------------------------------------------------------------
-# Cross-file repetition detection
+# Cross-file repetition detection (fuzzy – Jaccard token similarity)
 # ---------------------------------------------------------------------------
 
 REPETITION_MIN_FILES = 3
+REPETITION_SIMILARITY_THRESHOLD = 0.85
 _DOCSTRING_COLLECT_RE = re.compile(r'(?:"""|\'\'\')(.*?)(?:"""|\'\'\')' , re.DOTALL)
 
 
+def _jaccard(text_a: str, text_b: str) -> float:
+    """Token-level Jaccard similarity between two normalised strings."""
+    tokens_a = set(text_a.split())
+    tokens_b = set(text_b.split())
+    if not tokens_a or not tokens_b:
+        return 0.0
+    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
 def detect_cross_file_repetition(registry: "dict[str, list[str]]") -> List[Match]:
-    """Flag docstrings that appear verbatim (normalised) across 3+ different files."""
+    """Flag docstrings that are verbatim or near-verbatim (≥85 % Jaccard) in 3+ files.
+
+    Extends exact-hash matching with token-level Jaccard similarity so that
+    paraphrased AI scaffolding (same structure, slightly different wording) is
+    also caught.
+    """
     extra: List[Match] = []
-    for text_key, filepaths in registry.items():
-        if len(filepaths) >= REPETITION_MIN_FILES:
-            for fp in filepaths:
+    keys = list(registry.keys())
+
+    # Union-find: group keys whose Jaccard similarity meets the threshold
+    parent: "dict[str, str]" = {k: k for k in keys}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # path compression
+            x = parent[x]
+        return x
+
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            if _jaccard(keys[i], keys[j]) >= REPETITION_SIMILARITY_THRESHOLD:
+                ri, rj = find(keys[i]), find(keys[j])
+                if ri != rj:
+                    parent[ri] = rj
+
+    groups: "dict[str, list[str]]" = {}
+    for k in keys:
+        groups.setdefault(find(k), []).append(k)
+
+    for root_key, group_keys in groups.items():
+        all_files: "list[str]" = []
+        for k in group_keys:
+            all_files.extend(registry[k])
+        unique_files = list(dict.fromkeys(all_files))  # deduplicate, preserve insertion order
+        if len(unique_files) >= REPETITION_MIN_FILES:
+            for fp in unique_files:
                 extra.append(Match(
                     file=fp,
                     line_number=0,
-                    line_text=text_key[:120],
-                    pattern_raw=f"identical docstring in {len(filepaths)} files",
+                    line_text=root_key[:120],
+                    pattern_raw=f"near-identical docstring in {len(unique_files)} files",
                     category="Cross-File Repetition",
                     severity="HIGH",
                     score=5.0,
                     context="STRING",
                 ))
     return extra
+
+
+# ---------------------------------------------------------------------------
+# Ignore patterns (.synthscanignore)
+# ---------------------------------------------------------------------------
+
+def load_ignore_patterns(ignore_file: str) -> "list[re.Pattern]":
+    """Load gitignore-style glob patterns from *ignore_file*."""
+    pats: "list[re.Pattern]" = []
+    if not os.path.isfile(ignore_file):
+        return pats
+    with open(ignore_file, encoding="utf-8") as fh:
+        for raw in fh:
+            stripped = raw.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            # Minimal glob → regex: ** → .*, * → [^/]*, ? → [^/]
+            regex_str = (
+                re.escape(stripped)
+                .replace(r"\*\*", ".*")
+                .replace(r"\*", "[^/]*")
+                .replace(r"\?", "[^/]")
+            )
+            try:
+                pats.append(re.compile(regex_str))
+            except re.error:
+                pass
+    return pats
+
+
+def _is_ignored(filepath: Path, root: Path, ignore_pats: "list[re.Pattern]") -> bool:
+    """Return True if *filepath* matches any pattern in *ignore_pats*."""
+    try:
+        rel = str(filepath.relative_to(root)).replace(os.sep, "/")
+    except ValueError:
+        rel = str(filepath)
+    return any(p.search(rel) for p in ignore_pats)
+
+
+# ---------------------------------------------------------------------------
+# Unified diff parsing (PR / diff mode)
+# ---------------------------------------------------------------------------
+
+def parse_unified_diff(diff_text: str) -> "dict[str, set[int]]":
+    """Parse a unified diff and return ``{relative_path: {added_line_numbers}}``."""
+    result: "dict[str, set[int]]" = {}
+    current_file: "str | None" = None
+    current_new_line = 0
+    for raw_line in diff_text.split("\n"):
+        if raw_line.startswith("+++ b/"):
+            current_file = raw_line[6:].strip()
+            result.setdefault(current_file, set())
+            current_new_line = 0
+        elif raw_line.startswith("@@ "):
+            hunk_m = re.match(r"@@ -\d+(?:,\d+)? \+(\d+)", raw_line)
+            if hunk_m:
+                current_new_line = int(hunk_m.group(1)) - 1
+        elif current_file is not None:
+            if raw_line.startswith("\\"):
+                continue  # e.g. "\\ No newline at end of file"
+            if raw_line.startswith("+") and not raw_line.startswith("+++"):
+                current_new_line += 1
+                result[current_file].add(current_new_line)
+            elif not raw_line.startswith("-"):
+                current_new_line += 1
+
+
+# ---------------------------------------------------------------------------
+# SARIF 2.1.0 output (GitHub Code Scanning inline annotations)
+# ---------------------------------------------------------------------------
+
+def write_sarif(result: "ScanResult", repo_root: str, output_path: str) -> None:
+    """Write a SARIF 2.1.0 report enabling GitHub Code Scanning PR annotations."""
+    rule_index: "dict[str, dict]" = {}
+    for m in result.matches:
+        rule_id = re.sub(r"[^a-zA-Z0-9/_.-]", "-", m.category)
+        if rule_id not in rule_index:
+            sarif_level = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning", "LOW": "note"}.get(
+                m.severity, "warning"
+            )
+            rule_index[rule_id] = {
+                "id": rule_id,
+                "name": m.category,
+                "shortDescription": {"text": m.category},
+                "defaultConfiguration": {"level": sarif_level},
+            }
+
+    sarif_results = []
+    for m in result.matches:
+        if m.line_number == 0:
+            continue  # cross-file repetition hits have no specific line
+        rule_id = re.sub(r"[^a-zA-Z0-9/_.-]", "-", m.category)
+        sarif_level = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning", "LOW": "note"}.get(
+            m.severity, "warning"
+        )
+        rel_path = os.path.relpath(m.file, repo_root).replace(os.sep, "/")
+        sarif_results.append({
+            "ruleId": rule_id,
+            "level": sarif_level,
+            "message": {"text": f"[{m.severity}] {m.category}: {m.pattern_raw}"},
+            "locations": [{
+                "physicalLocation": {
+                    "artifactLocation": {"uri": rel_path, "uriBaseId": "%SRCROOT%"},
+                    "region": {"startLine": m.line_number},
+                }
+            }],
+        })
+
+    sarif_doc = {
+        "version": "2.1.0",
+        "$schema": SARIF_SCHEMA,
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "SynthScan",
+                    "version": SYNTHSCAN_VERSION,
+                    "informationUri": "https://github.com/marcoramilli/SynthScan",
+                    "rules": list(rule_index.values()),
+                }
+            },
+            "results": sarif_results,
+        }],
+    }
+    with open(output_path, "w", encoding="utf-8") as fh:
+        json.dump(sarif_doc, fh, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -535,11 +775,16 @@ DIMINISHING_RETURNS_THRESHOLD = 20
 DIMINISHING_RETURNS_FACTOR = 0.5
 
 
-def scan_directory(root: str, patterns: List[PatternDef]) -> ScanResult:
+def scan_directory(
+    root: str,
+    patterns: List[PatternDef],
+    ignore_patterns: "list[re.Pattern] | None" = None,
+    diff_map: "dict[str, set[int]] | None" = None,
+) -> ScanResult:
     """Walk *root* and scan every eligible source file."""
     result = ScanResult()
     root_path = Path(root).resolve()
-    docstring_registry: dict[str, list[str]] = {}
+    docstring_registry: "dict[str, list[str]]" = {}
 
     for dirpath, dirnames, filenames in os.walk(root_path):
         # Prune ignored directories in-place
@@ -549,6 +794,20 @@ def scan_directory(root: str, patterns: List[PatternDef]) -> ScanResult:
             fpath = Path(dirpath) / fname
             if not _is_scannable(fpath):
                 continue
+            if ignore_patterns and _is_ignored(fpath, root_path, ignore_patterns):
+                continue
+
+            # Diff mode: only process files that have added lines in the diff
+            diff_lines_for_file: "set[int] | None" = None
+            if diff_map is not None:
+                try:
+                    rel_key = str(fpath.relative_to(root_path)).replace(os.sep, "/")
+                except ValueError:
+                    rel_key = str(fpath)
+                diff_lines_for_file = diff_map.get(rel_key)
+                if not diff_lines_for_file:
+                    continue  # file has no added lines in this diff — skip entirely
+
             # Read file text once; reuse for line count and docstring collection
             try:
                 file_text = fpath.read_text(encoding="utf-8", errors="replace")
@@ -556,7 +815,10 @@ def scan_directory(root: str, patterns: List[PatternDef]) -> ScanResult:
                 continue
 
             line_count = file_text.count("\n") + 1
-            result.lines_scanned += line_count
+            # In diff mode normalise score against added LOC, not total file LOC
+            result.lines_scanned += (
+                len(diff_lines_for_file) if diff_lines_for_file is not None else line_count
+            )
             result.files_scanned += 1
 
             # Collect normalised docstrings for cross-file repetition detection
@@ -565,7 +827,7 @@ def scan_directory(root: str, patterns: List[PatternDef]) -> ScanResult:
                 if len(normalized) > 50:
                     docstring_registry.setdefault(normalized, []).append(str(fpath))
 
-            file_matches: List[Match] = scan_file(fpath, patterns)
+            file_matches: List[Match] = scan_file(fpath, patterns, diff_lines=diff_lines_for_file)
             file_matches = apply_clustering(file_matches)
 
             block_matches = scan_file_blocks(fpath)
@@ -685,7 +947,25 @@ def main() -> None:
     print(f"Loaded {len(patterns)} patterns from {patterns_file}")
     print(f"Scanning: {os.path.realpath(scan_path)}")
 
-    result = scan_directory(scan_path, patterns)
+    # Diff mode (optional): only score lines introduced in a unified diff
+    diff_map: "dict[str, set[int]] | None" = None
+    diff_file = os.environ.get("INPUT_DIFF_FILE", "")
+    if diff_file and os.path.isfile(diff_file):
+        with open(diff_file, encoding="utf-8") as fh:
+            diff_map = parse_unified_diff(fh.read())
+        print(f"Diff mode active: scoring added lines in {len(diff_map)} changed files")
+
+    # Ignore patterns (.synthscanignore by default)
+    ignore_file = os.environ.get("INPUT_IGNORE_FILE", ".synthscanignore")
+    loaded_ignore = load_ignore_patterns(ignore_file)
+    if loaded_ignore:
+        print(f"Loaded {len(loaded_ignore)} ignore patterns from {ignore_file}")
+
+    result = scan_directory(
+        scan_path, patterns,
+        ignore_patterns=loaded_ignore or None,
+        diff_map=diff_map,
+    )
 
     print(f"\n{'='*60}")
     print(f"Raw score            : {result.total_score:.0f}  ({len(result.matches)} matches)")
@@ -754,6 +1034,16 @@ def main() -> None:
     with open(report_path, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2)
     print(f"JSON report written to {report_path}")
+
+    # SARIF report (optional) — enables GitHub Code Scanning inline PR annotations
+    sarif_enabled = os.environ.get("INPUT_SARIF_OUTPUT", "false").lower() in ("true", "1", "yes")
+    if sarif_enabled:
+        sarif_path = os.environ.get("INPUT_SARIF_PATH", "synthscan-report.sarif")
+        write_sarif(result, os.path.realpath(scan_path), sarif_path)
+        print(f"SARIF report written to {sarif_path}")
+        if github_output:
+            with open(github_output, "a", encoding="utf-8") as fh:
+                fh.write(f"sarif_path={sarif_path}\n")
 
     # Fail the step if score exceeds threshold (0 = never fail)
     if score_threshold > 0 and result.synthetic_code_score >= score_threshold:
