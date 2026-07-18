@@ -3,6 +3,7 @@
 [![GitHub Marketplace](https://img.shields.io/badge/Marketplace-SynthScan-orange?logo=github)](https://github.com/marketplace/actions/synthscan)
 [![npm version](https://img.shields.io/npm/v/synthscan.svg)](https://www.npmjs.com/package/synthscan)
 [![PyPI version](https://img.shields.io/pypi/v/synthscan.svg)](https://pypi.org/project/synthscan/)
+[![Version](https://img.shields.io/badge/version-2.0-blue)](https://github.com/marcoramilli/SynthScan/releases)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **Detect AI-generated (synthetic) code patterns in your repository.** Available as a powerful CLI tool (via **npm** or **pip**) and as a fully automated **GitHub Action**.

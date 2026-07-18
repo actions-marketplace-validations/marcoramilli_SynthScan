@@ -710,12 +710,13 @@ def parse_unified_diff(diff_text: str) -> "dict[str, set[int]]":
             if hunk_m:
                 current_new_line = int(hunk_m.group(1)) - 1
         elif current_file is not None:
+            if raw_line.startswith("\\"):
+                continue  # e.g. "\\ No newline at end of file"
             if raw_line.startswith("+") and not raw_line.startswith("+++"):
                 current_new_line += 1
                 result[current_file].add(current_new_line)
             elif not raw_line.startswith("-"):
                 current_new_line += 1
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -816,7 +817,7 @@ def scan_directory(
                 except ValueError:
                     rel_key = str(fpath)
                 diff_lines_for_file = diff_map.get(rel_key)
-                if diff_lines_for_file is None:
+                if not diff_lines_for_file:
                     continue  # file has no added lines in this diff — skip entirely
 
             # Read file text once; reuse for line count and docstring collection

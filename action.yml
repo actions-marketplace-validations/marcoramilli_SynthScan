@@ -47,20 +47,28 @@ inputs:
 outputs:
   score:
     description: "The Synthetic Code Score (normalised per 1k LOC)."
+    value: ${{ steps.scan.outputs.score }}
   raw_score:
     description: "The raw (un-normalised) total score."
+    value: ${{ steps.scan.outputs.raw_score }}
   match_count:
     description: "Number of pattern matches found."
+    value: ${{ steps.scan.outputs.match_count }}
   lines_scanned:
     description: "Total lines of code scanned."
+    value: ${{ steps.scan.outputs.lines_scanned }}
   issue_body:
     description: "Full Markdown body of the report (also used in the issue)."
+    value: ${{ steps.scan.outputs.issue_body }}
   high_critical_hit_rate:
     description: "Number of HIGH or CRITICAL matches per file scanned."
+    value: ${{ steps.scan.outputs.high_critical_hit_rate }}
   by_directory:
     description: "JSON object mapping directory paths to their score."
+    value: ${{ steps.scan.outputs.by_directory }}
   sarif_path:
     description: "Path of the emitted SARIF report (only set when sarif_output is true)."
+    value: ${{ steps.scan.outputs.sarif_path }}
 
 runs:
   using: "composite"
@@ -131,5 +139,5 @@ runs:
       if: inputs.sarif_output == 'true' && always()
       uses: github/codeql-action/upload-sarif@v3
       with:
-        sarif_file: synthscan-report.sarif
+        sarif_file: ${{ steps.scan.outputs.sarif_path }}
         category: synthscan
