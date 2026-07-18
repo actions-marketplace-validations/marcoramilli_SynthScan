@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """SynthScan – detect AI-generated / synthetic code patterns in a repository."""
 
+import argparse
 import ast
 import json
 import os
@@ -13,6 +14,17 @@ from typing import List
 # ---------------------------------------------------------------------------
 # Data structures
 # ---------------------------------------------------------------------------
+
+class Colors:
+    HEADER = '\033[95m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    RED = '\033[91m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+    ENDC = '\033[0m'
 
 # Severity tag → numeric score
 SEVERITY_SCORES = {
@@ -935,31 +947,49 @@ def build_issue_body(result: ScanResult, repo_root: str) -> str:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    scan_path = os.environ.get("INPUT_SCAN_PATH", ".")
-    patterns_file = os.environ.get("INPUT_PATTERNS_FILE", PATTERNS_DEFAULT)
-    score_threshold = float(os.environ.get("INPUT_SCORE_THRESHOLD", "0"))
+    parser = argparse.ArgumentParser(description="SynthScan – detect AI-generated / synthetic code patterns.")
+    parser.add_argument("--scan-path", default=os.environ.get("INPUT_SCAN_PATH", "."), help="Directory to scan.")
+    parser.add_argument("--patterns-file", default=os.environ.get("INPUT_PATTERNS_FILE", PATTERNS_DEFAULT), help="Path to patterns markdown file.")
+    parser.add_argument("--score-threshold", type=float, default=float(os.environ.get("INPUT_SCORE_THRESHOLD", "0")), help="Fail the action when the Synthetic Code Score meets or exceeds this value.")
+    parser.add_argument("--diff-file", default=os.environ.get("INPUT_DIFF_FILE", ""), help="Path to a unified diff file.")
+    parser.add_argument("--ignore-file", default=os.environ.get("INPUT_IGNORE_FILE", ".synthscanignore"), help="Path to a .synthscanignore file.")
+    parser.add_argument("--report-path", default=os.environ.get("INPUT_REPORT_PATH", "synthscan-report.json"), help="File path for the JSON report.")
+    parser.add_argument("--sarif-output", default=os.environ.get("INPUT_SARIF_OUTPUT", "false"), help="Emit a SARIF report (true/false).")
+    parser.add_argument("--sarif-path", default=os.environ.get("INPUT_SARIF_PATH", "synthscan-report.sarif"), help="Path for the SARIF report.")
+    parser.add_argument("--format", choices=["text", "json"], default=os.environ.get("INPUT_FORMAT", "text"), help="Output format (text or json).")
+
+    args = parser.parse_args()
+
+    def t_print(*a, **kw) -> None:
+        if args.format == "text":
+            print(*a, **kw)
+
+    scan_path = args.scan_path
+    patterns_file = args.patterns_file
+    score_threshold = args.score_threshold
 
     patterns = load_patterns(patterns_file)
     if not patterns:
         print("No patterns loaded – check your patterns file.", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Loaded {len(patterns)} patterns from {patterns_file}")
-    print(f"Scanning: {os.path.realpath(scan_path)}")
+    t_print(f"{Colors.BLUE}{Colors.BOLD}SynthScan {SYNTHSCAN_VERSION}{Colors.ENDC} - Detecting synthetic code patterns")
+    t_print(f"{Colors.CYAN}Loaded {len(patterns)} patterns from {patterns_file}{Colors.ENDC}")
+    t_print(f"{Colors.CYAN}Scanning: {os.path.realpath(scan_path)}{Colors.ENDC}")
 
     # Diff mode (optional): only score lines introduced in a unified diff
     diff_map: "dict[str, set[int]] | None" = None
-    diff_file = os.environ.get("INPUT_DIFF_FILE", "")
+    diff_file = args.diff_file
     if diff_file and os.path.isfile(diff_file):
         with open(diff_file, encoding="utf-8") as fh:
             diff_map = parse_unified_diff(fh.read())
-        print(f"Diff mode active: scoring added lines in {len(diff_map)} changed files")
+        t_print(f"{Colors.CYAN}Diff mode active: scoring added lines in {len(diff_map)} changed files{Colors.ENDC}")
 
     # Ignore patterns (.synthscanignore by default)
-    ignore_file = os.environ.get("INPUT_IGNORE_FILE", ".synthscanignore")
+    ignore_file = args.ignore_file
     loaded_ignore = load_ignore_patterns(ignore_file)
     if loaded_ignore:
-        print(f"Loaded {len(loaded_ignore)} ignore patterns from {ignore_file}")
+        t_print(f"{Colors.CYAN}Loaded {len(loaded_ignore)} ignore patterns from {ignore_file}{Colors.ENDC}")
 
     result = scan_directory(
         scan_path, patterns,
@@ -967,29 +997,31 @@ def main() -> None:
         diff_map=diff_map,
     )
 
-    print(f"\n{'='*60}")
-    print(f"Raw score            : {result.total_score:.0f}  ({len(result.matches)} matches)")
-    print(f"Lines scanned        : {result.lines_scanned}  ({result.files_scanned} files)")
-    print(f"Synthetic Code Score : {result.synthetic_code_score:.1f}  (per 1k LOC)")
-    print(f"HIGH/CRITICAL rate   : {result.high_critical_hit_rate:.2f} per file")
-    print(f"{'='*60}")
+    score_color = Colors.GREEN if result.synthetic_code_score < 10 else Colors.YELLOW if result.synthetic_code_score < 50 else Colors.RED
+
+    t_print(f"\n{Colors.HEADER}{'='*60}{Colors.ENDC}")
+    t_print(f"{Colors.BOLD}Raw score            :{Colors.ENDC} {result.total_score:.0f}  ({len(result.matches)} matches)")
+    t_print(f"{Colors.BOLD}Lines scanned        :{Colors.ENDC} {result.lines_scanned:,}  ({result.files_scanned} files)")
+    t_print(f"{Colors.BOLD}Synthetic Code Score :{Colors.ENDC} {score_color}{result.synthetic_code_score:.1f}{Colors.ENDC}  (per 1k LOC)")
+    t_print(f"{Colors.BOLD}HIGH/CRITICAL rate   :{Colors.ENDC} {result.high_critical_hit_rate:.2f} per file")
+    t_print(f"{Colors.HEADER}{'='*60}{Colors.ENDC}")
     if result.by_directory:
         top_dirs = sorted(result.by_directory.items(), key=lambda x: x[1], reverse=True)[:5]
-        print("\nTop directories by score:")
+        t_print(f"\n{Colors.BOLD}Top directories by score:{Colors.ENDC}")
         for d, s in top_dirs:
-            print(f"  - {d}: {s:.0f} pts")
+            t_print(f"  - {d}: {Colors.YELLOW}{s:.0f} pts{Colors.ENDC}")
 
     # Per-category breakdown
     if result.matches:
         by_cat: dict[str, list[Match]] = {}
         for m in result.matches:
             by_cat.setdefault(m.category, []).append(m)
-        print("\nMatches by category:")
+        t_print(f"\n{Colors.BOLD}Matches by category:{Colors.ENDC}")
         for cat in sorted(by_cat, key=lambda c: sum(m.score for m in by_cat[c]), reverse=True):
             cat_matches = by_cat[cat]
             cat_score = sum(m.score for m in cat_matches)
-            print(f"  - {cat}: {len(cat_matches)} matches ({cat_score:.0f} pts)")
-    print()
+            t_print(f"  - {cat}: {len(cat_matches)} matches ({Colors.YELLOW}{cat_score:.0f} pts{Colors.ENDC})")
+    t_print()
 
     issue_body = build_issue_body(result, os.path.realpath(scan_path))
 
@@ -1007,7 +1039,7 @@ def main() -> None:
             fh.write(f"issue_body<<EOF_SYNTHSCAN\n{issue_body}\nEOF_SYNTHSCAN\n")
 
     # Also write a JSON report
-    report_path = os.environ.get("INPUT_REPORT_PATH", "synthscan-report.json")
+    report_path = args.report_path
     report = {
         "synthetic_code_score": round(result.synthetic_code_score, 1),
         "raw_score": result.total_score,
@@ -1033,21 +1065,25 @@ def main() -> None:
     }
     with open(report_path, "w", encoding="utf-8") as fh:
         json.dump(report, fh, indent=2)
-    print(f"JSON report written to {report_path}")
+    t_print(f"{Colors.GREEN}✔ JSON report written to {report_path}{Colors.ENDC}")
+
+    # Dump JSON to stdout if requested
+    if args.format == "json":
+        print(json.dumps(report, indent=2))
 
     # SARIF report (optional) — enables GitHub Code Scanning inline PR annotations
-    sarif_enabled = os.environ.get("INPUT_SARIF_OUTPUT", "false").lower() in ("true", "1", "yes")
+    sarif_enabled = args.sarif_output.lower() in ("true", "1", "yes")
     if sarif_enabled:
-        sarif_path = os.environ.get("INPUT_SARIF_PATH", "synthscan-report.sarif")
+        sarif_path = args.sarif_path
         write_sarif(result, os.path.realpath(scan_path), sarif_path)
-        print(f"SARIF report written to {sarif_path}")
+        t_print(f"{Colors.GREEN}✔ SARIF report written to {sarif_path}{Colors.ENDC}")
         if github_output:
             with open(github_output, "a", encoding="utf-8") as fh:
                 fh.write(f"sarif_path={sarif_path}\n")
 
     # Fail the step if score exceeds threshold (0 = never fail)
     if score_threshold > 0 and result.synthetic_code_score >= score_threshold:
-        print(f"\n::error::Synthetic Code Score {result.synthetic_code_score:.1f} meets or exceeds threshold {score_threshold:.0f}")
+        print(f"\n::error::Synthetic Code Score {result.synthetic_code_score:.1f} meets or exceeds threshold {score_threshold:.0f}", file=sys.stderr)
         sys.exit(1)
 
 
