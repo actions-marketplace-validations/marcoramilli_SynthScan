@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "synthscan"
+version = "2.0.1"
+description = "Detect AI-generated / synthetic code patterns."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "Marco Ramilli" }]
+dependencies = []
+
+[project.scripts]
+synthscan = "scanner.synthscan:main"
+
+[tool.setuptools]
+packages = ["scanner", "patterns"]
+
+[tool.setuptools.package-data]
+patterns = ["*.md"]

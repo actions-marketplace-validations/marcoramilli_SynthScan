@@ -53,12 +53,12 @@ Here is how you can
 This should work for most cases
 You can modify this to
 You may want to adjust
-Make sure to replace
-Don't forget to
+[LOW] Make sure to replace
+[LOW] Don't forget to
 # Instructional tone (AI talks to the user, not the reader)
 regex:#.*\byou can\s+(also\s+)?(use|try|add|change|modify|adjust|replace)\b
-regex:#.*\bmake sure (to|you)\b
-regex:#.*\bdon'?t forget to\b
+[LOW] regex:#.*\bmake sure (to|you)\b
+[LOW] regex:#.*\bdon'?t forget to\b
 ```
 
 ---
@@ -204,25 +204,33 @@ regex:#\s*Usage:\s*$
 
 ## Fake / Example Data
 
-Default severity: **MEDIUM**
+Default severity: **LOW**
 
 Hardcoded placeholder data that AI models insert as "examples" and developers forget to replace.
+Severity reduced to LOW because placeholder emails and names like "John Doe" appear
+frequently in legitimate pre-ChatGPT sample code, tutorials, and documentation.
 
 ```patterns
-# Canonical placeholder names / emails
-regex:['"]John\s+Doe['"]
-regex:['"]Jane\s+Doe['"]
-regex:['"]user@example\.com['"]
-regex:['"]admin@example\.com['"]
-regex:['"]test@test\.com['"]
-regex:['"]foo@bar\.com['"]
-regex:['"]123\s+Main\s+St(reet)?['"]
-regex:['"]Acme\s+(Corp|Inc|Ltd)['"]
-# Lorem ipsum / placeholder text
+# Canonical placeholder names / emails — LOW to reduce false positives on old tutorial code
+[LOW] regex:['"]John\s+Doe['"]
+[LOW] regex:['"]Jane\s+Doe['"]
+[LOW] regex:['"]user@example\.com['"]
+[LOW] regex:['"]admin@example\.com['"]
+[LOW] regex:['"]test@test\.com['"]
+[LOW] regex:['"]foo@bar\.com['"]
+[LOW] regex:['"]123\s+Main\s+St(reet)?['"]
+[LOW] regex:['"]Acme\s+(Corp|Inc|Ltd)['"]
+# Modern AI placeholder data (2025-2026)
+[LOW] regex:['"].*@example\.org['"]
+[LOW] regex:['"]placeholder['"]
+[LOW] regex:\bdummy[_-](data|value|user|email|key|token|id)\b
+[LOW] regex:\bfake[_-](data|user|email|key|token|name)\b
+[LOW] regex:['"]<YOUR[_-]?VALUE[_-]?HERE>['"]
+# Lorem ipsum / placeholder text — strong AI signal when in code (not docs)
 Lorem ipsum
 dolor sit amet
 # Phone number placeholders
-regex:['"]555-\d{4}['"]
+[LOW] regex:['"]555-\d{4}['"]
 ```
 
 ---
@@ -276,15 +284,18 @@ regex:\w+\.\w+\.\w+\.\w+\.\w+\.\w+\(
 
 Default severity: **LOW**
 
+Applies to: .py, .js, .ts, .jsx, .tsx
+
 Function names so generic they indicate AI-generated scaffolding rather than
-domain-specific design.
+domain-specific design. Severity is LOW because experienced humans also write
+these as stubs — cluster scoring carries the signal.
 
 ```patterns
-regex:def\s+(process_data|handle_request|do_something|do_stuff)\s*\(
-regex:def\s+(run_task|execute_task|perform_action|main_function)\s*\(
-regex:def\s+(helper|my_function|my_method|test_function)\s*\(
-regex:function\s+(processData|handleRequest|doSomething|getData)\s*\(
-regex:func\s+(processData|handleRequest|doSomething)\s*\(
+[LOW] regex:def\s+(process_data|handle_request|do_something|do_stuff)\s*\(
+[LOW] regex:def\s+(run_task|execute_task|perform_action|main_function)\s*\(
+[LOW] regex:def\s+(helper|my_function|my_method|test_function)\s*\(
+[LOW] regex:function\s+(processData|handleRequest|doSomething|getData)\s*\(
+[LOW] regex:func\s+(processData|handleRequest|doSomething)\s*\(
 ```
 
 ---
@@ -321,6 +332,205 @@ regex://.*[─━═╌╍┄┅]{5,}
 # Long dash/equals separator lines (10+ chars)
 regex:#\s*-{10,}\s*$
 regex:#\s*={10,}\s*$
+```
+
+---
+
+## Magic Placeholder Names
+
+Default severity: **HIGH**
+
+Hardcoded API key and token placeholders that AI models insert as stand-ins.
+Near-certain AI artifacts when found in source code.
+
+```patterns
+regex:\byour[_-]?api[_-]?key\b
+regex:\bYOUR[_-]?API[_-]?KEY\b
+regex:\bYOUR[_-]?TOKEN[_-]?HERE\b
+regex:\bYOUR[_-]?SECRET[_-]?HERE\b
+regex:\bINSERT[_-]?YOUR[_-]?(KEY|TOKEN|SECRET|PASSWORD)\b
+regex:['"]?<YOUR[_-]?(API[_-]?KEY|TOKEN|SECRET)>['"]?
+regex:\byour[_-]?database[_-]?url\b
+regex:\bYOUR[_-]?DATABASE[_-]?URL\b
+```
+
+---
+
+## Hyper-Verbose Identifiers
+
+Default severity: **LOW**
+
+Function names so long they describe implementation rather than domain intent.
+AI models consistently produce identifiers like `calculateTotalAmountOfAllItems`
+where a human writes `total_price`.
+
+```patterns
+regex:def\s+[a-z_]{25,}\s*\(
+regex:function\s+[a-zA-Z]{25,}\s*\(
+regex:def\s+[a-z_]*(process|calculate|compute|validate|handle|get|set)(And|Or|Then)[A-Z]
+regex:function\s+[a-zA-Z]*(process|calculate|compute|validate|handle|get|set)(And|Or|Then)[A-Z]
+regex:class\s+\w*(DataManager|DataProcessor|DataHandler|RequestHandler|ResponseHandler)\b
+```
+
+---
+
+## Cross-Language Confusion (JS/TS)
+
+Default severity: **HIGH**
+
+Applies to: .js, .ts, .jsx, .tsx
+
+Python idioms incorrectly used in JavaScript/TypeScript files.
+Experienced JS/TS developers never write these; AI models do frequently.
+
+```patterns
+regex:\breturn\s+None\b
+regex:\bif\s+\w+\s*(==|===|!=|!==)\s*None\b
+regex:\breturn\s+(True|False)\b
+regex:^\s*elif\s+
+regex:^\s*print\s*\(
+```
+
+---
+
+---
+
+## AI Response Leakage
+
+Default severity: **HIGH**
+
+AI assistant response text that leaked verbatim into source code comments or
+docstrings. These phrases originate from the conversational framing of a chat
+response, not from deliberate developer commentary.
+
+```patterns
+# Chatbot response preamble leaking into comments
+regex:#.*\bI('ve| have) (added|implemented|updated|created|modified|written)\b
+regex:#.*\bI('ll| will) (add|implement|update|create|handle|explain)\b
+regex:#.*\bHere I('ll| will|'ve)\b
+regex:#.*\bIn this (solution|implementation|approach|version|example)\b
+regex:#.*\bBased on (the|your|our) (code|requirements|request|above)\b
+regex:#.*\bLooking at (the|your|this) (code|function|class|file|error)\b
+regex:#.*\bNote that I (have|had|will|would)\b
+regex://.*\bI('ve| have) (added|implemented|updated|created)\b
+regex://.*\bIn this (solution|implementation|approach)\b
+```
+
+---
+
+## Modern AI Meta-Vocabulary
+
+Default severity: **MEDIUM**
+
+Terms that became prominent in AI discourse during 2024-2026 and now appear
+disproportionately in AI-generated comments and docstrings. Individually weak;
+the clustering bonus amplifies the signal when several appear together.
+
+```patterns
+# 2025-2026 LLM ecosystem buzzwords in comments
+regex:#.*\b(guardrails|agentic|agent-based|multi-agent)\b
+regex:#.*\b(orchestrat(e|es|ing|ion)|scaffold(ing)?)\b
+regex:#.*\b(hallucina(te|tes|tion|tions))\b
+regex:#.*\b(chain[- ]of[- ]thought|reasoning trace|context window)\b
+regex:#.*\b(prompt engineer|few[- ]shot|zero[- ]shot|fine[- ]tun)\b
+regex:#.*\b(RAG|retrieval[- ]augmented|vector stor|embedding model)\b
+regex://.*\b(guardrails|agentic|orchestrat|scaffold|hallucina)\b
+# Overused 2024-2025 "AI-approved" design vocabulary in comments
+regex:#.*\b(event[- ]driven|microservice|hexagonal architecture)\b
+regex:#.*\b(SOLID principles?|dependency injection|inversion of control)\b
+```
+
+---
+
+## TODO Padding
+
+Default severity: **LOW**
+
+Generic TODO and FIXME comments that AI assistants insert as placeholder reminders.
+They are vague, non-actionable, and almost never written by developers who own
+the code they are modifying.
+
+```patterns
+regex:#\s*TODO:\s*(Add|Implement|Handle|Create|Update|Fix|Write|Consider)\s+(proper\s+)?(error|exception|input|edge|validation|logging|test|caching|auth)
+regex:#\s*TODO:\s*implement\b
+regex:#\s*TODO:\s*add\s+(proper\s+)?(error\s+handling|logging|tests|validation|docstring)
+regex:#\s*TODO:\s*handle\s+(edge\s+cases?|errors?|exceptions?|corner\s+cases?)
+regex:#\s*TODO:\s*consider\s+(adding|using|implementing|refactoring)
+regex:#\s*FIXME:\s*(this|handle|fix)\s+(is\s+)?(not\s+)?(implement|correct|complet|optimis|finish)
+regex://\s*TODO:\s*(Add|Implement|Handle|Fix)\s+(proper\s+)?(error|exception|validation|logging|test)
+regex://\s*TODO:\s*implement\b
+```
+
+---
+
+## Structural Annotation Overuse
+
+Default severity: **LOW**
+
+AI models systematically prefix every other comment with `NOTE:`, `IMPORTANT:`,
+or `WARNING:` labels, turning routine inline notes into bureaucratic annotations.
+Humans use these sparingly; AI uses them on nearly every comment block.
+
+```patterns
+# NOTE/IMPORTANT/WARNING on trivial observations (all-caps prefix + generic noun)
+regex:#\s*NOTE:\s+This (function|method|class|module|variable|parameter|value)
+regex:#\s*NOTE:\s+The (following|above|below|result|output|input|default)
+regex:#\s*IMPORTANT:\s+Make sure (to|you|that)
+regex:#\s*IMPORTANT:\s+(Don't|Do not|Note that|Be (careful|aware|sure))
+regex:#\s*WARNING:\s+(This|The|Note|Be (careful|aware))
+regex://\s*NOTE:\s+This (function|method|class|variable)
+regex://\s*IMPORTANT:\s+Make sure
+# Numbered step narration (AI loves procedural comment sequences)
+regex:#\s*Step\s+\d+\s*[:/\-]\s+\w
+regex://\s*Step\s+\d+\s*[:/\-]\s+\w
+```
+
+---
+
+## Modern Structural Boilerplate
+
+Default severity: **LOW**
+
+Applies to: .py
+
+Code scaffolding patterns that AI assistants add universally, regardless of
+whether the file actually needs them. Individually innocuous; clustered
+occurrences across a codebase are a strong AI-generation signal.
+
+```patterns
+# Universal logger at module level — AI adds this to every file including trivial scripts
+regex:^logger\s*=\s*logging\.getLogger\(__name__\)
+# Mandatory __all__ export list on single-symbol modules
+regex:^__all__\s*=\s*\[
+# Defensive isinstance guard that can never be False by construction
+regex:if not isinstance\(\w+,\s*\w+\):\s*raise\s+(TypeError|ValueError)
+# Overly annotated setter with explicit -> None return type
+regex:def\s+(set_|_set|update_|_update)\w+\s*\([^)]*\)\s*->\s*None\s*:
+```
+
+---
+
+## AI Structural Patterns
+
+Default severity: **LOW**
+
+Applies to: .py
+
+Structural code patterns detected by SynthScan's AST analysis layer. This
+category is populated programmatically by the scanner engine — the patterns
+documented here describe what the AST detects, not regex matches. The scanner
+flags:
+
+- **Result-variable anti-pattern** — a function assigns an expression to a
+  generic name (`result`, `output`, `res`, etc.) and immediately returns it,
+  rather than returning the expression directly.
+- **Over-parameterized functions** — functions with more than 7 optional
+  arguments with default values, a hallmark of AI "future-proofing".
+
+```patterns
+# Stub pattern — prevents an empty category in reports.
+# Actual detection is done by the AST engine (scan_file_ast).
+regex:^\s*#\s*synthscan-ast-placeholder-do-not-use
 ```
 
 ---
